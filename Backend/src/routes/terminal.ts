@@ -1,5 +1,6 @@
 import express from 'express';
 import { spawn } from 'child_process';
+import { existsSync } from 'fs';
 import OpenAI from 'openai';
 import { authenticateToken } from '../middleware/auth';
 import { checkSafety, COMMAND_SUGGESTIONS } from '../lib/safety';
@@ -86,7 +87,8 @@ router.post('/exec', authenticateToken, async (req, res) => {
 
     emitToUser(userId, 'terminal-start', { id, command: cmd, timestamp: startedAt });
 
-    const child = spawn('/bin/bash', ['-lc', cmd], {
+    const shell = existsSync('/bin/bash') ? '/bin/bash' : '/bin/sh';
+    const child = spawn(shell, ['-c', cmd], {
         cwd: process.cwd(),
         env: process.env,
     });
