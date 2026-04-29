@@ -59,7 +59,7 @@ loadPortRegistry();
 // The config file is bind-mounted into the nextbase-haproxy container.
 // We write the full file and send SIGUSR2 (graceful reload) to the container.
 
-const HAPROXY_CFG_PATH = path.resolve(process.cwd(), '..', 'nextbase-proxy.cfg');
+const HAPROXY_CFG_PATH = path.resolve(process.cwd(), 'nextbase-proxy.cfg');
 const HAPROXY_CONTAINER = 'nextbase-haproxy';
 const HAPROXY_NETWORK = 'nextbase-apps';
 
