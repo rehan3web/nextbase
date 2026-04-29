@@ -120,14 +120,12 @@ services:
       - dbcraft-server
 
   # ── HAProxy reverse-proxy for auto-deployed app containers ─────────────────
-  # Listens on host ports 8000-8098. Each deploy gets the next free port.
-  # Backend writes nextbase-proxy.cfg and reloads HAProxy via SIGUSR2.
+  # No external ports — nginx reaches it directly by container name on the
+  # default network. Backend writes nextbase-proxy.cfg and reloads via SIGUSR2.
   nextbase-haproxy:
     container_name: nextbase-haproxy
     image: haproxy:alpine
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:8000-8098:8000-8098"
     volumes:
       - ./nextbase-proxy.cfg:/usr/local/etc/haproxy/haproxy.cfg
     networks:
@@ -136,19 +134,23 @@ services:
     depends_on:
       - dbcraft-server
 
-  # ── Nginx reverse proxy — domain → container port, managed by Nextbase ────────
-  # Uses host networking so proxy_pass http://127.0.0.1:<port> reaches HAProxy.
-  # Configs auto-written by the backend into ./nginx-configs/; certbot certs at
-  # ./letsencrypt/; ACME webroot at ./certbot-webroot/.
+  # ── Nginx reverse proxy — domain → HAProxy container, managed by Nextbase ──
+  # Bridge networking so proxy_pass http://nextbase-haproxy:<port> resolves via
+  # Docker DNS. Ports 80/443 mapped to host for public HTTPS + ACME challenges.
+  # Configs auto-written by the backend; certs at ./letsencrypt/.
   nextbase-nginx:
     container_name: nextbase-nginx
     image: nginx:alpine
     restart: unless-stopped
-    network_mode: host
+    ports:
+      - "80:80"
+      - "443:443"
     volumes:
       - ./nginx-configs:/etc/nginx/conf.d:ro
       - ./letsencrypt:/etc/letsencrypt:ro
       - ./certbot-webroot:/var/www/certbot:ro
+    networks:
+      - default
     depends_on:
       - dbcraft-server
 
