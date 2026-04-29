@@ -1,6 +1,6 @@
 FROM node:20-alpine
 
-RUN apk add --no-cache postgresql-client docker-cli docker-compose
+RUN apk add --no-cache postgresql-client docker-cli docker-compose bash
 
 WORKDIR /usr/src/app
 
