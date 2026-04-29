@@ -86,7 +86,9 @@ server {
     }
 
     location / {
-        proxy_pass http://nextbase-haproxy:${port};
+        resolver 127.0.0.11 valid=10s;
+        set $upstream http://nextbase-haproxy:${port};
+        proxy_pass $upstream;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "";
@@ -129,7 +131,9 @@ server {
     ssl_session_timeout 1d;
 
     location / {
-        proxy_pass http://nextbase-haproxy:${port};
+        resolver 127.0.0.11 valid=10s;
+        set $upstream http://nextbase-haproxy:${port};
+        proxy_pass $upstream;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "";
