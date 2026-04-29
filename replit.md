@@ -15,6 +15,7 @@ Nextbase is a self-hosted, full-stack PostgreSQL management tool — a lightweig
 - **AI Terminal**: Shell command runner with NVIDIA LLM integration (user-supplied API key, AES-GCM encrypted at rest), live WS-streamed output, command suggestions, dangerous-command safety guards requiring explicit "I CONFIRM" confirmation
 - **Docker Manager**: Container start/stop/restart/remove + bulk actions via dockerode (gracefully reports unavailable when Docker is not installed)
 - **GitHub Auto Deploy**: Clone Git repo → detect Dockerfile → docker build → docker run; live deployment logs streamed per-user via Socket.IO
+- **Reverse Proxy Manager**: Map domain → target port (nginx config generated, written to `nginx-configs/`). DNS A-record verification via `dns.promises.resolve4`. Let's Encrypt SSL via certbot (`docker run --volumes-from dbofather-server certbot/certbot`). Status flow: Pending DNS → Verified → SSL Active. Nginx container (`nextbase-nginx`, `network_mode: host`) auto-reloaded after every change.
 
 ## Security Model
 - **REST API**: All `/api/*` routes (except `/auth`, `/health`) require a valid JWT bearer token.
@@ -68,11 +69,14 @@ Nextbase is a self-hosted, full-stack PostgreSQL management tool — a lightweig
 - `Backend/src/index.ts`: Express server entry point
 - `Backend/src/lib/db.ts`: PostgreSQL connection pool
 - `Backend/src/lib/config.ts`: Config loader (postgres.yml + .env)
-- `Backend/src/routes/`: auth, db, query, admin, system, terminal, docker, deploy route handlers
+- `Backend/src/routes/`: auth, db, query, admin, system, terminal, docker, deploy, proxy route handlers
 - `Backend/src/lib/socket.ts`: Shared Socket.IO instance + scoped emission helpers (`emitToUser`, `emitToAuthed`, `emitTo`)
 - `Backend/src/lib/safety.ts`: Dangerous-command regex patterns + curated command suggestions
 - `Backend/src/lib/settings.ts`: Postgres-backed key/value store with automatic encryption for secret keys
 - `Backend/src/lib/crypto.ts`: AES-256-GCM helpers used to encrypt secrets at rest
 - `Frontend/src/api/socket.ts`: Singleton Socket.IO client that auto-attaches the JWT in the handshake
-- `Frontend/src/pages/{vps,terminal,docker,deploy}.tsx`: New feature pages
-- `postgres.yml`: Docker Compose config (for self-hosted deployments)
+- `Frontend/src/pages/{vps,terminal,docker,deploy,proxy}.tsx`: Feature pages
+- `postgres.yml`: Docker Compose config — includes `nextbase-nginx` (host-network nginx), `nextbase-haproxy` (8000-8098), `dbofather-server` (backend)
+- `nginx-configs/`: nginx per-domain `.conf` files auto-written by the backend; `default.conf` is the catch-all placeholder
+- `letsencrypt/`: bind-mounted into backend + nginx containers; certbot writes certs here
+- `certbot-webroot/`: bind-mounted ACME challenge directory served by nginx at `/.well-known/acme-challenge/`
