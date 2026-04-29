@@ -3,6 +3,7 @@ import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import net from 'net';
 import { authenticateToken } from '../middleware/auth';
 import { emitToUser } from '../lib/socket';
 
@@ -11,6 +12,36 @@ const router = express.Router();
 const DEPLOY_ROOT = path.resolve(process.cwd(), '.nextbase-deploys');
 if (!fs.existsSync(DEPLOY_ROOT)) {
     fs.mkdirSync(DEPLOY_ROOT, { recursive: true });
+}
+
+// Find the last EXPOSE port in a Dockerfile (handles multi-stage builds).
+function parseExposedPort(dockerfilePath: string): number | null {
+    try {
+        const lines = fs.readFileSync(dockerfilePath, 'utf8').split('\n');
+        let last: number | null = null;
+        for (const line of lines) {
+            const m = line.trim().match(/^EXPOSE\s+(\d+)/i);
+            if (m) last = parseInt(m[1], 10);
+        }
+        return last;
+    } catch {
+        return null;
+    }
+}
+
+// Find a free host port starting from `start`, incrementing until one binds.
+function findFreePort(start = 8000): Promise<number> {
+    return new Promise((resolve, reject) => {
+        const server = net.createServer();
+        server.listen(start, '0.0.0.0', () => {
+            const addr = server.address() as net.AddressInfo;
+            server.close(() => resolve(addr.port));
+        });
+        server.on('error', () => {
+            if (start >= 9999) return reject(new Error('No free port found in 8000-9999'));
+            findFreePort(start + 1).then(resolve).catch(reject);
+        });
+    });
 }
 
 interface DeployRecord {
@@ -22,6 +53,9 @@ interface DeployRecord {
     startedAt: number;
     finishedAt?: number;
     error?: string;
+    hostPort?: number;
+    containerPort?: number;
+    containerName?: string;
     logs: { stream: 'stdout' | 'stderr' | 'system'; chunk: string; timestamp: number }[];
 }
 
@@ -99,6 +133,9 @@ router.get('/list', authenticateToken, (req, res) => {
                 startedAt: d.startedAt,
                 finishedAt: d.finishedAt,
                 error: d.error,
+                hostPort: d.hostPort,
+                containerPort: d.containerPort,
+                containerName: d.containerName,
             })),
     });
 });
@@ -170,6 +207,22 @@ router.post('/github', authenticateToken, async (req, res) => {
                 return;
             }
 
+            // Detect EXPOSE port from Dockerfile and find a free host port
+            const containerPort = parseExposedPort(dockerfilePath);
+            let hostPort: number | null = null;
+            if (containerPort) {
+                try {
+                    hostPort = await findFreePort(8000);
+                    record.containerPort = containerPort;
+                    record.hostPort = hostPort;
+                    emitLog(id, 'system', `\nDetected EXPOSE ${containerPort} → mapping to host port ${hostPort}\n`);
+                } catch (portErr: any) {
+                    emitLog(id, 'system', `\nWarning: ${portErr.message} — starting without port mapping\n`);
+                }
+            } else {
+                emitLog(id, 'system', '\nNo EXPOSE found in Dockerfile — starting without port mapping\n');
+            }
+
             emitStatus(id, 'building');
             emitLog(id, 'system', `\nBuilding image ${imageTag}\n`);
             const buildCode = await runStreamed(id, 'docker', ['build', '-t', imageTag, '.'], cloneDir);
@@ -183,7 +236,11 @@ router.post('/github', authenticateToken, async (req, res) => {
 
             emitStatus(id, 'running');
             emitLog(id, 'system', `\nStarting container ${containerName}\n`);
-            const runCode = await runStreamed(id, 'docker', ['run', '-d', '--name', containerName, imageTag], cloneDir);
+            record.containerName = containerName;
+            const portArgs = (hostPort && containerPort)
+                ? ['-p', `${hostPort}:${containerPort}`]
+                : [];
+            const runCode = await runStreamed(id, 'docker', ['run', '-d', '--name', containerName, ...portArgs, imageTag], cloneDir);
             if (runCode !== 0) {
                 record.status = 'failed';
                 record.error = `docker run exited with code ${runCode}`;
@@ -194,8 +251,9 @@ router.post('/github', authenticateToken, async (req, res) => {
 
             record.status = 'success';
             record.finishedAt = Date.now();
-            emitLog(id, 'system', `\nDeployment successful: container ${containerName} is running.\n`);
-            emitStatus(id, 'success', { containerName, imageTag });
+            const portMsg = hostPort ? ` — exposed on host port ${hostPort}` : '';
+            emitLog(id, 'system', `\nDeployment successful: container ${containerName} is running${portMsg}.\n`);
+            emitStatus(id, 'success', { containerName, imageTag, hostPort, containerPort });
         } catch (err: any) {
             record.status = 'failed';
             record.error = err?.message || String(err);
