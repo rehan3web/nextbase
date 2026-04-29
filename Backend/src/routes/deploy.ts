@@ -69,7 +69,9 @@ function buildHAProxyCfg(): string {
         '    maxconn 4096',
         '',
         'defaults',
-        '    mode tcp',
+        '    mode http',
+        '    option forwardfor',
+        '    option http-server-close',
         '    timeout connect 5s',
         '    timeout client  1m',
         '    timeout server  1m',
@@ -87,6 +89,7 @@ function buildHAProxyCfg(): string {
     // Always keep the placeholder so HAProxy starts cleanly even with zero deploys
     lines.push('listen _ready');
     lines.push('    bind *:8099');
+    lines.push('    mode tcp');
     lines.push('    server noop 127.0.0.1:8099');
     lines.push('');
 
