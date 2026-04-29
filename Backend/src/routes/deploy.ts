@@ -2,8 +2,6 @@ import express from 'express';
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
-import os from 'os';
-import net from 'net';
 import { authenticateToken } from '../middleware/auth';
 import { emitToUser } from '../lib/socket';
 
@@ -14,12 +12,114 @@ if (!fs.existsSync(DEPLOY_ROOT)) {
     fs.mkdirSync(DEPLOY_ROOT, { recursive: true });
 }
 
-// Find the last EXPOSE port in a Dockerfile (handles multi-stage builds).
+// ── Port registry ─────────────────────────────────────────────────────────────
+// Pure in-memory Set — no socket binding, O(1) lookup. Persisted to a JSON
+// sidecar file so ports are not re-issued after a backend restart.
+
+const PORT_REGISTRY_FILE = path.join(DEPLOY_ROOT, '.port-registry.json');
+
+interface PortEntry {
+    hostPort: number;
+    containerName: string;
+    containerPort: number;
+    deployId: string;
+}
+
+const portRegistry = new Map<string, PortEntry>(); // key = deployId
+const usedPorts = new Set<number>();
+
+function loadPortRegistry() {
+    try {
+        const raw = JSON.parse(fs.readFileSync(PORT_REGISTRY_FILE, 'utf8')) as PortEntry[];
+        for (const e of raw) {
+            portRegistry.set(e.deployId, e);
+            usedPorts.add(e.hostPort);
+        }
+    } catch { /* first run */ }
+}
+
+function savePortRegistry() {
+    try {
+        fs.writeFileSync(PORT_REGISTRY_FILE, JSON.stringify([...portRegistry.values()], null, 2));
+    } catch { /* ignore */ }
+}
+
+// Instant — no socket binding. Scan from 8000, skip anything already claimed.
+function claimPort(): number {
+    let p = 8000;
+    while (usedPorts.has(p) && p < 8099) p++;
+    if (p >= 8099) throw new Error('No free port in 8000–8098');
+    usedPorts.add(p);
+    return p;
+}
+
+loadPortRegistry();
+
+// ── HAProxy config management ─────────────────────────────────────────────────
+// The config file is bind-mounted into the nextbase-haproxy container.
+// We write the full file and send SIGUSR2 (graceful reload) to the container.
+
+const HAPROXY_CFG_PATH = path.resolve(process.cwd(), '..', 'nextbase-proxy.cfg');
+const HAPROXY_CONTAINER = 'nextbase-haproxy';
+const HAPROXY_NETWORK = 'nextbase-apps';
+
+function buildHAProxyCfg(): string {
+    const lines = [
+        'global',
+        '    maxconn 4096',
+        '',
+        'defaults',
+        '    mode tcp',
+        '    timeout connect 5s',
+        '    timeout client  1m',
+        '    timeout server  1m',
+        '',
+    ];
+
+    for (const entry of portRegistry.values()) {
+        const label = entry.deployId.replace(/[^a-z0-9]/gi, '_').slice(-16);
+        lines.push(`listen app_${label}`);
+        lines.push(`    bind *:${entry.hostPort}`);
+        lines.push(`    server app ${entry.containerName}:${entry.containerPort}`);
+        lines.push('');
+    }
+
+    // Always keep the placeholder so HAProxy starts cleanly even with zero deploys
+    lines.push('listen _ready');
+    lines.push('    bind *:8099');
+    lines.push('    server noop 127.0.0.1:8099');
+    lines.push('');
+
+    return lines.join('\n');
+}
+
+async function reloadHAProxy(deployId: string) {
+    try {
+        fs.writeFileSync(HAPROXY_CFG_PATH, buildHAProxyCfg());
+    } catch (err: any) {
+        emitLog(deployId, 'system', `\n[warning: could not write HAProxy config: ${err.message}]\n`);
+        return;
+    }
+    // Send SIGUSR2 to the HAProxy container for graceful reload — no downtime.
+    await runQuiet('docker', ['exec', HAPROXY_CONTAINER, 'sh', '-c', 'kill -USR2 1 || true']);
+    emitLog(deployId, 'system', `\nHAProxy reloaded — container accessible on host port ${portRegistry.get(deployId)?.hostPort}\n`);
+}
+
+function runQuiet(command: string, args: string[]): Promise<void> {
+    return new Promise((resolve) => {
+        const child = spawn(command, args);
+        child.on('close', () => resolve());
+        child.on('error', () => resolve());
+    });
+}
+
+// ── Dockerfile helpers ────────────────────────────────────────────────────────
+
+// Parse the last EXPOSE line (handles multi-stage Dockerfiles).
 function parseExposedPort(dockerfilePath: string): number | null {
     try {
-        const lines = fs.readFileSync(dockerfilePath, 'utf8').split('\n');
         let last: number | null = null;
-        for (const line of lines) {
+        for (const line of fs.readFileSync(dockerfilePath, 'utf8').split('\n')) {
             const m = line.trim().match(/^EXPOSE\s+(\d+)/i);
             if (m) last = parseInt(m[1], 10);
         }
@@ -29,20 +129,7 @@ function parseExposedPort(dockerfilePath: string): number | null {
     }
 }
 
-// Find a free host port starting from `start`, incrementing until one binds.
-function findFreePort(start = 8000): Promise<number> {
-    return new Promise((resolve, reject) => {
-        const server = net.createServer();
-        server.listen(start, '0.0.0.0', () => {
-            const addr = server.address() as net.AddressInfo;
-            server.close(() => resolve(addr.port));
-        });
-        server.on('error', () => {
-            if (start >= 9999) return reject(new Error('No free port found in 8000-9999'));
-            findFreePort(start + 1).then(resolve).catch(reject);
-        });
-    });
-}
+// ── Misc ──────────────────────────────────────────────────────────────────────
 
 interface DeployRecord {
     id: string;
@@ -68,9 +155,6 @@ function emitLog(id: string, stream: 'stdout' | 'stderr' | 'system', chunk: stri
         rec.logs.push(entry);
         if (rec.logs.length > 1000) rec.logs.shift();
     }
-    // Scoped emission: only the deploy owner's per-user room. Avoiding the
-    // generic `deploy-<id>` room keeps an attacker who learns/guesses an id
-    // from joining the room and observing logs.
     if (rec?.ownerId) emitToUser(rec.ownerId, 'deploy-log', { id, ...entry });
 }
 
@@ -96,8 +180,7 @@ function runStreamed(id: string, command: string, args: string[], cwd: string): 
 
 function deriveProjectName(repo: string): string {
     try {
-        const cleaned = repo.replace(/\.git$/i, '').replace(/\/+$/g, '');
-        return cleaned.split('/').pop() || 'project';
+        return repo.replace(/\.git$/i, '').replace(/\/+$/g, '').split('/').pop() || 'project';
     } catch {
         return 'project';
     }
@@ -108,11 +191,7 @@ function safeName(name: string): string {
 }
 
 function dockerAvailable(): boolean {
-    try {
-        return fs.existsSync('/var/run/docker.sock');
-    } catch {
-        return false;
-    }
+    try { return fs.existsSync('/var/run/docker.sock'); } catch { return false; }
 }
 
 function ownerIdFromReq(req: express.Request): string {
@@ -120,22 +199,17 @@ function ownerIdFromReq(req: express.Request): string {
     return String(u?.id ?? u?.username ?? 'anonymous');
 }
 
+// ── Routes ────────────────────────────────────────────────────────────────────
+
 router.get('/list', authenticateToken, (req, res) => {
     const ownerId = ownerIdFromReq(req);
     res.json({
         deployments: Array.from(deployments.values())
             .filter(d => d.ownerId === ownerId)
             .map(d => ({
-                id: d.id,
-                repo: d.repo,
-                name: d.name,
-                status: d.status,
-                startedAt: d.startedAt,
-                finishedAt: d.finishedAt,
-                error: d.error,
-                hostPort: d.hostPort,
-                containerPort: d.containerPort,
-                containerName: d.containerName,
+                id: d.id, repo: d.repo, name: d.name, status: d.status,
+                startedAt: d.startedAt, finishedAt: d.finishedAt, error: d.error,
+                hostPort: d.hostPort, containerPort: d.containerPort, containerName: d.containerName,
             })),
     });
 });
@@ -143,9 +217,7 @@ router.get('/list', authenticateToken, (req, res) => {
 router.get('/:id', authenticateToken, (req, res) => {
     const rec = deployments.get(String(req.params.id));
     if (!rec) return res.status(404).json({ message: 'Deployment not found' });
-    if (rec.ownerId !== ownerIdFromReq(req)) {
-        return res.status(403).json({ message: 'Forbidden' });
-    }
+    if (rec.ownerId !== ownerIdFromReq(req)) return res.status(403).json({ message: 'Forbidden' });
     res.json(rec);
 });
 
@@ -162,98 +234,102 @@ router.post('/github', authenticateToken, async (req, res) => {
     const containerName = `nb-${projectName}-${id}`.toLowerCase();
 
     const record: DeployRecord = {
-        id,
-        repo,
-        name: projectName,
+        id, repo, name: projectName,
         ownerId: ownerIdFromReq(req),
         status: 'pending',
         startedAt: Date.now(),
         logs: [],
     };
     deployments.set(id, record);
-
     res.json({ id, name: projectName });
 
-    // ── Run deploy pipeline asynchronously ─────────────────────────────────────
     (async () => {
         try {
             emitStatus(id, 'cloning');
             emitLog(id, 'system', `Cloning ${repo} into ${cloneDir}\n`);
             const cloneCode = await runStreamed(id, 'git', ['clone', '--depth', '1', repo, cloneDir], DEPLOY_ROOT);
             if (cloneCode !== 0) {
-                record.status = 'failed';
                 record.error = `git clone exited with code ${cloneCode}`;
                 record.finishedAt = Date.now();
-                emitStatus(id, 'failed', { error: record.error });
-                return;
+                return emitStatus(id, 'failed', { error: record.error });
             }
 
             const dockerfilePath = path.join(cloneDir, 'Dockerfile');
             if (!fs.existsSync(dockerfilePath)) {
-                record.status = 'failed';
                 record.error = 'Dockerfile not detected. Deployment failed.';
                 record.finishedAt = Date.now();
                 emitLog(id, 'stderr', '\n[Dockerfile not detected. Deployment failed.]\n');
-                emitStatus(id, 'failed', { error: record.error });
-                return;
+                return emitStatus(id, 'failed', { error: record.error });
             }
 
             if (!dockerAvailable()) {
-                record.status = 'failed';
-                record.error = 'Docker is not available on this host. Install Docker on your VPS to enable deployments.';
+                record.error = 'Docker socket not found. Mount /var/run/docker.sock to enable deployments.';
                 record.finishedAt = Date.now();
                 emitLog(id, 'stderr', `\n[${record.error}]\n`);
-                emitStatus(id, 'failed', { error: record.error });
-                return;
+                return emitStatus(id, 'failed', { error: record.error });
             }
 
-            // Detect EXPOSE port from Dockerfile and find a free host port
+            // Claim a port instantly from the in-memory registry (no socket binding).
             const containerPort = parseExposedPort(dockerfilePath);
             let hostPort: number | null = null;
             if (containerPort) {
                 try {
-                    hostPort = await findFreePort(8000);
+                    hostPort = claimPort();
                     record.containerPort = containerPort;
                     record.hostPort = hostPort;
-                    emitLog(id, 'system', `\nDetected EXPOSE ${containerPort} → mapping to host port ${hostPort}\n`);
+                    emitLog(id, 'system', `\nDetected EXPOSE ${containerPort} → will proxy via HAProxy on host port ${hostPort}\n`);
                 } catch (portErr: any) {
-                    emitLog(id, 'system', `\nWarning: ${portErr.message} — starting without port mapping\n`);
+                    emitLog(id, 'system', `\nWarning: ${portErr.message} — starting without port proxy\n`);
                 }
             } else {
-                emitLog(id, 'system', '\nNo EXPOSE found in Dockerfile — starting without port mapping\n');
+                emitLog(id, 'system', '\nNo EXPOSE found in Dockerfile — starting without port proxy\n');
             }
 
             emitStatus(id, 'building');
             emitLog(id, 'system', `\nBuilding image ${imageTag}\n`);
             const buildCode = await runStreamed(id, 'docker', ['build', '-t', imageTag, '.'], cloneDir);
             if (buildCode !== 0) {
-                record.status = 'failed';
+                // Release the claimed port if build fails
+                if (hostPort) usedPorts.delete(hostPort);
                 record.error = `docker build exited with code ${buildCode}`;
                 record.finishedAt = Date.now();
-                emitStatus(id, 'failed', { error: record.error });
-                return;
+                return emitStatus(id, 'failed', { error: record.error });
             }
 
             emitStatus(id, 'running');
-            emitLog(id, 'system', `\nStarting container ${containerName}\n`);
+            emitLog(id, 'system', `\nStarting container ${containerName} on network ${HAPROXY_NETWORK}\n`);
             record.containerName = containerName;
-            const portArgs = (hostPort && containerPort)
-                ? ['-p', `${hostPort}:${containerPort}`]
-                : [];
-            const runCode = await runStreamed(id, 'docker', ['run', '-d', '--name', containerName, ...portArgs, imageTag], cloneDir);
+
+            // Run on the nextbase-apps network so HAProxy can reach it by name.
+            // No -p flag needed — HAProxy handles external access.
+            const runCode = await runStreamed(id, 'docker', [
+                'run', '-d',
+                '--name', containerName,
+                '--network', HAPROXY_NETWORK,
+                imageTag,
+            ], cloneDir);
+
             if (runCode !== 0) {
-                record.status = 'failed';
+                if (hostPort) usedPorts.delete(hostPort);
                 record.error = `docker run exited with code ${runCode}`;
                 record.finishedAt = Date.now();
-                emitStatus(id, 'failed', { error: record.error });
-                return;
+                return emitStatus(id, 'failed', { error: record.error });
+            }
+
+            // Register in port registry and write + reload HAProxy config.
+            if (hostPort && containerPort) {
+                const entry: PortEntry = { hostPort, containerName, containerPort, deployId: id };
+                portRegistry.set(id, entry);
+                savePortRegistry();
+                await reloadHAProxy(id);
             }
 
             record.status = 'success';
             record.finishedAt = Date.now();
-            const portMsg = hostPort ? ` — exposed on host port ${hostPort}` : '';
+            const portMsg = hostPort ? ` — proxied via HAProxy on host port ${hostPort}` : '';
             emitLog(id, 'system', `\nDeployment successful: container ${containerName} is running${portMsg}.\n`);
             emitStatus(id, 'success', { containerName, imageTag, hostPort, containerPort });
+
         } catch (err: any) {
             record.status = 'failed';
             record.error = err?.message || String(err);
