@@ -519,6 +519,9 @@ export type DeploySummary = {
   startedAt: number;
   finishedAt?: number;
   error?: string;
+  hostPort?: number;
+  containerPort?: number;
+  containerName?: string;
 };
 
 export function useGetDeployments() {
