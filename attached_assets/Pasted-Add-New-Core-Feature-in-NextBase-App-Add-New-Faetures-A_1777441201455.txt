@@ -1,0 +1,213 @@
+Add New Core Feature in NextBase App
+Add New Faetures
+
+Add VPS Management in App 
+CPU Ram And Storage and Load in Chart and Stat to Live Victual 
+
+1. AI Terminal (Core Feature)
+•	Add a Terminal UI inside the Admin Panel dashboard.
+•	The terminal should allow:
+o	Manual command execution by admin users.
+o	AI-generated command execution using NVIDIA LLM API.
+o	NVIDIA API Key is Must Set by User in Terminal Setting
+If Not Set then AI Not Configure
+•	AI Integration:
+o	Use NVIDIA LLM API (ChatGPT-like behavior).
+o	User can type natural language → AI converts it into shell commands.
+o	Show AI-generated commands before execution.
+o	Display real-time execution logs in the terminal UI.
+________________________________________
+2. Command Safety System (CRITICAL)
+•	Add Suggestion in Terminal:
+ls	List directory contents
+pwd	Show current directory path
+cd	Change directory
+locate	Search files by name
+find	Search files and directories
+mkdir	Create a directory
+rmdir	Remove an empty directory
+rm	Delete files or directories
+cp	Copy files or directories
+mv	Move or rename files
+touch	Create an empty file
+file	Show file type
+zip	Compress files into ZIP archive
+unzip	Extract ZIP archive
+tar	Archive files and directories
+nano	Edit files with Nano
+vi	Edit files with Vi
+jed	Edit files with Jed
+cat	Display file content
+grep	Search text patterns in files
+sed	Replace or modify text patterns
+head	Show first lines of a file
+tail	Show last lines of a file
+awk	Process and analyze text
+sort	Sort file content
+cut	Extract sections of text
+diff	Compare two files
+tee	Output to terminal and file
+sudo	Run command as administrator
+su	Switch user account
+whoami	Show current user
+chmod	Change file permissions
+chown	Change file ownership
+useradd	Create new user
+userdel	Delete user account
+passwd	Set or change password
+df	Show disk space usage
+du	Show directory size
+top	Display running processes
+htop	Interactive process viewer
+ps	Show process snapshot
+uname	Show system information
+hostname	Show or set hostname
+time	Measure command execution time
+systemctl	Manage system services
+watch	Run command repeatedly
+jobs	List shell background jobs
+kill	Terminate a process
+shutdown	Shut down or restart system
+ping	Test network connectivity
+wget	Download files from the web
+curl	Transfer data via URL
+scp	Copy files over SSH
+rsync	Sync files between systems
+ip	Manage network settings
+netstat	Show network connections
+traceroute	Trace network packet path
+nslookup	Query DNS records
+dig	Detailed DNS lookup
+history	Show command history
+man	Show command manual
+echo	Print text to terminal
+ln	Create file links
+alias	Create command shortcut
+unalias	Remove command shortcut
+cal	Display calendar
+apt	Manage packages (Debian-based)
+dnf	Manage packages (RHEL-based)
+
+
+•	Detect dangerous commands such as:
+o	rm -rf /
+o	any rm -rf pattern
+o	shutdown
+o	reboot
+o	mkfs
+•	If a dangerous command is detected:
+o	Show a terminal alert:
+"⚠️ Dangerous Command Detected. Are you sure?"
+o	Require user to type: I CONFIRM
+o	Only then allow execution.
+•	Backend validation is mandatory:
+o	Never rely only on frontend validation.
+o	Block execution unless confirmation flag is passed.
+________________________________________
+3. Execution Layer
+•	Commands should NOT run directly on the host.
+•	Use Docker-based sandbox execution.
+•	Each command runs in an isolated container.
+•	Apply limits:
+o	CPU limits
+o	Memory limits
+________________________________________
+4. Docker Management Tool
+Create a full Docker management panel with:
+•	View all containers (running + stopped)
+•	Container health/status
+•	Start container
+•	Stop container
+•	Restart container
+•	Delete container
+•	Remove all containers
+•	Stop all containers
+•	Restart all containers
+Use Docker API (dockerode or equivalent).
+________________________________________
+5. GitHub Auto Deploy System
+•	User inputs a Git repository URL from GitHub
+Deployment Flow:
+1.	Clone repository
+2.	Check if Dockerfile exists
+If Dockerfile exists:
+•	Build Docker image
+•	Run container
+If Dockerfile NOT found:
+•	Show error:
+"Dockerfile not detected. Deployment failed."
+________________________________________
+6. Live Deployment Logs
+•	Show real-time logs in UI during:
+o	git clone
+o	docker build
+o	container start
+•	Display errors clearly in terminal-style UI.
+________________________________________
+7. Additional Requirements
+•	Use Node.js backend
+•	Use React / Next.js frontend
+•	Real-time updates using WebSockets (for logs + terminal)
+•	Maintain execution history (logs database optional)
+•	Secure all endpoints with authentication (JWT)
+8. UI Design
+•	Use Same UI Same Another App
+•	Modern UI same App
+•	Same Supabase UI 
+9. LLM API Code
+import OpenAI from "openai";
+import readline from "readline";
+
+const openai = new OpenAI({
+  apiKey: "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",
+  baseURL: "https://integrate.api.nvidia.com/v1",
+});
+
+// readline setup (user input ke liye)
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout,
+});
+
+// chat function
+async function chat(userInput) {
+  // 1.8 second delay before request
+  await new Promise((resolve) => setTimeout(resolve, 1800));
+
+  const completion = await openai.chat.completions.create({
+    model: "openai/gpt-oss-120b",
+    messages: [
+      { role: "system", content: "You are a helpful assistant." },
+      { role: "user", content: userInput },
+    ],
+    temperature: 0.7,
+    max_tokens: 1024,
+    stream: true,
+  });
+
+  // streaming response
+  for await (const chunk of completion) {
+    const text = chunk.choices[0]?.delta?.content || "";
+    process.stdout.write(text);
+  }
+
+  console.log("\n");
+}
+
+// loop (continuous chat)
+function startChat() {
+  rl.question("You: ", async (input) => {
+    if (input.toLowerCase() === "exit") {
+      rl.close();
+      return;
+    }
+
+    process.stdout.write("AI: ");
+    await chat(input);
+
+    startChat(); // loop again
+  });
+}
+
+startChat();
+

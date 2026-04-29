@@ -1,0 +1,114 @@
+name: dbcraft
+
+# ══════════════════════════════════════════════════════════════════
+#  All credentials are read from .env in the same directory.
+#  Copy .env.example → .env and fill in your values, then run:
+#  docker compose -f postgres.yml up -d --build
+# ══════════════════════════════════════════════════════════════════
+
+services:
+
+  postgres:
+    container_name: dbofather-db
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     ${DB_USERNAME}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB:       ${DB_NAME}
+    ports:
+      - "127.0.0.1:15432:5432"   # local-only; haproxy proxy serves public :5432
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  pgbouncer:
+    container_name: dbofather-pooler
+    image: edoburu/pgbouncer:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:16543:5432"   # local-only; haproxy proxy serves public :6543
+    environment:
+      DB_HOST:     postgres
+      DB_PORT:     5432
+      DB_USER:     ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME:     ${DB_NAME}
+      POOL_MODE:   transaction
+      MAX_CLIENT_CONN:   1000
+      DEFAULT_POOL_SIZE: 10
+      AUTH_TYPE:   scram-sha-256
+      IGNORE_STARTUP_PARAMETERS: extra_float_digits,search_path
+
+  # ── HAProxy TCP proxy — started by "Expose Public" button ──────────────────
+  # Built from Proxy/Dockerfile which bakes haproxy.cfg into the image.
+  # HAProxy finds its config at the default path — no entrypoint override needed.
+  dbcraft-proxy:
+    container_name: dbofather-proxy
+    build:
+      context: ./Proxy
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:5432:5432"   # direct postgres (public)
+      - "0.0.0.0:6543:6543"   # pgbouncer pooler (public)
+    depends_on:
+      postgres:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_started
+    profiles:
+      - expose
+
+  dbcraft-server:
+    container_name: dbofather-server
+    build:
+      context: ./Backend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3001:3001"
+    depends_on:
+      pgbouncer:
+        condition: service_started
+    environment:
+      # ── PostgreSQL connection — connects to the pooler for best performance ──────
+      PGHOST:     pgbouncer
+      PGPORT:     5432
+      PGUSER:     ${DB_USERNAME}
+      PGPASSWORD: ${DB_PASSWORD}
+      PGDATABASE: ${DB_NAME}
+      # ── DBCraft admin credentials ────────────────────────────────
+      ADMIN_USERNAME: ${ADMIN_USERNAME}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      JWT_SECRET:     ${JWT_SECRET}
+      PORT: 3001
+    volumes:
+      # Docker socket — required for pg_dump via docker exec
+      - /var/run/docker.sock:/var/run/docker.sock
+      # postgres.yml config — mounted for reference
+      - ./postgres.yml:/config/postgres.yml
+      # .env file — mounted so backend can read variable names if needed
+      - ./.env:/config/.env
+      # Proxy directory — mounted so the backend can build the proxy image
+      - ./Proxy:/config/Proxy
+      # Persistent backups directory
+      - ./backups:/usr/src/app/backups
+
+  dbcraft-client:
+    container_name: dbofather-client
+    build:
+      context: ./Frontend
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:3000:80"
+    depends_on:
+      - dbcraft-server
+
+volumes:
+  pgdata:
