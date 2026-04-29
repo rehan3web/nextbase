@@ -110,5 +110,26 @@ services:
     depends_on:
       - dbcraft-server
 
+  # ── HAProxy reverse-proxy for auto-deployed app containers ─────────────────
+  # Listens on host ports 8000-8098. Each deploy gets the next free port.
+  # Backend writes nextbase-proxy.cfg and reloads HAProxy via SIGUSR2.
+  nextbase-haproxy:
+    container_name: nextbase-haproxy
+    image: haproxy:alpine
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:8000-8098:8000-8098"
+    volumes:
+      - ./nextbase-proxy.cfg:/usr/local/etc/haproxy/haproxy.cfg
+    networks:
+      - default
+      - apps
+    depends_on:
+      - dbcraft-server
+
 volumes:
   pgdata:
+
+networks:
+  apps:
+    name: nextbase-apps
