@@ -188,6 +188,11 @@ export default function DeployPage() {
                             <DeployStatusBadge status={d.status} />
                           </div>
                           <p className="font-mono text-[10px] text-muted-foreground truncate">{d.repo}</p>
+                          {d.hostPort && d.containerPort && (
+                            <p className="font-mono text-[10px] text-primary/80 mt-0.5">
+                              :{d.hostPort} → :{d.containerPort}
+                            </p>
+                          )}
                           <p className="font-mono text-[10px] text-muted-foreground">{format(new Date(d.startedAt), "MMM dd, HH:mm:ss")}</p>
                         </button>
                       ))
