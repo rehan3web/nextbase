@@ -542,3 +542,53 @@ export async function startGithubDeploy(repo: string): Promise<{ id: string; nam
 export async function getDeployment(id: string): Promise<any> {
   return apiFetch(`/deploy/${id}`);
 }
+
+// ── Reverse Proxy Manager ─────────────────────────────────────────────────────
+
+export type ProxyDomain = {
+  id: number;
+  domain: string;
+  target_port: number;
+  verified: boolean;
+  ssl_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export function useGetProxyDomains() {
+  return useQuery({
+    queryKey: ["proxy-domains"],
+    queryFn: () => apiFetch<{ domains: ProxyDomain[] }>("/proxy/list"),
+    refetchInterval: 8000,
+  });
+}
+
+export async function getServerIp(): Promise<{ ip: string }> {
+  return apiFetch("/proxy/server-ip");
+}
+
+export async function createProxyDomain(domain: string, targetPort: number): Promise<{ domain: ProxyDomain }> {
+  return apiFetch("/proxy/create", {
+    method: "POST",
+    body: JSON.stringify({ domain, targetPort }),
+  });
+}
+
+export async function verifyProxyDomain(id: number): Promise<{ verified: boolean; ip?: string; message?: string; found?: string[]; expected?: string }> {
+  return apiFetch(`/proxy/verify/${id}`, { method: "POST" });
+}
+
+export async function enableProxySSL(id: number, email: string): Promise<{ started: boolean; taskId: string }> {
+  return apiFetch(`/proxy/ssl/${id}`, {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
+export async function deleteProxyDomain(id: number): Promise<{ ok: boolean }> {
+  return apiFetch(`/proxy/${id}`, { method: "DELETE" });
+}
+
+export async function reloadProxy(): Promise<{ ok: boolean }> {
+  return apiFetch("/proxy/reload", { method: "POST" });
+}
