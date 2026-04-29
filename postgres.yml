@@ -108,6 +108,8 @@ services:
       - ./letsencrypt:/etc/letsencrypt
       # Reverse Proxy — certbot ACME webroot challenge dir
       - ./certbot-webroot:/var/www/certbot
+      # HAProxy config — backend writes this file, HAProxy reads it
+      - ./nextbase-proxy.cfg:/usr/src/app/nextbase-proxy.cfg
 
   dbcraft-client:
     container_name: dbofather-client
