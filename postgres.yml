@@ -88,6 +88,9 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       JWT_SECRET:     ${JWT_SECRET}
       PORT: 3001
+      # ── Reverse Proxy ────────────────────────────────────────────
+      SELF_CONTAINER_NAME: dbofather-server
+      NGINX_CONTAINER_NAME: nextbase-nginx
     volumes:
       # Docker socket — required for pg_dump via docker exec
       - /var/run/docker.sock:/var/run/docker.sock
@@ -99,6 +102,12 @@ services:
       - ./Proxy:/config/Proxy
       # Persistent backups directory
       - ./backups:/usr/src/app/backups
+      # Reverse Proxy — nginx configs (written by backend, read by nginx)
+      - ./nginx-configs:/usr/src/app/nginx-configs
+      # Reverse Proxy — Let's Encrypt certs (written by certbot via --volumes-from)
+      - ./letsencrypt:/etc/letsencrypt
+      # Reverse Proxy — certbot ACME webroot challenge dir
+      - ./certbot-webroot:/var/www/certbot
 
   dbcraft-client:
     container_name: dbofather-client
@@ -124,6 +133,22 @@ services:
     networks:
       - default
       - apps
+    depends_on:
+      - dbcraft-server
+
+  # ── Nginx reverse proxy — domain → container port, managed by Nextbase ────────
+  # Uses host networking so proxy_pass http://127.0.0.1:<port> reaches HAProxy.
+  # Configs auto-written by the backend into ./nginx-configs/; certbot certs at
+  # ./letsencrypt/; ACME webroot at ./certbot-webroot/.
+  nextbase-nginx:
+    container_name: nextbase-nginx
+    image: nginx:alpine
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./nginx-configs:/etc/nginx/conf.d:ro
+      - ./letsencrypt:/etc/letsencrypt:ro
+      - ./certbot-webroot:/var/www/certbot:ro
     depends_on:
       - dbcraft-server
 
