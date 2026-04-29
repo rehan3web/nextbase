@@ -12,6 +12,7 @@ import systemRoutes from './routes/system';
 import terminalRoutes from './routes/terminal';
 import dockerRoutes from './routes/docker';
 import deployRoutes from './routes/deploy';
+import proxyRoutes from './routes/proxy';
 import { setIo } from './lib/socket';
 
 dotenv.config();
@@ -42,6 +43,7 @@ app.use('/api/system', systemRoutes);
 app.use('/api/terminal', terminalRoutes);
 app.use('/api/docker', dockerRoutes);
 app.use('/api/deploy', deployRoutes);
+app.use('/api/proxy', proxyRoutes);
 
 // ── Socket.IO JWT handshake middleware ────────────────────────────────────────
 // Reject any socket that does not present a valid bearer token. Authenticated
