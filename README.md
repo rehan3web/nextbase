@@ -3,54 +3,69 @@
 </p>
 
 <p align="center">
-  <strong>Self-hosted PostgreSQL database management — built for developers who own their infrastructure.</strong>
+  <strong>Full-stack VPS management dashboard — deploy apps, manage databases, proxy domains, and control your entire server from one UI.</strong>
 </p>
 
 <p align="center">
+  <a href="#-what-is-nextbase">About</a> ·
   <a href="#-features">Features</a> ·
   <a href="#-quick-start">Quick Start</a> ·
   <a href="#-architecture">Architecture</a> ·
   <a href="#-configuration">Configuration</a> ·
   <a href="#-usage-guide">Usage Guide</a> ·
-  <a href="#-reset-password">Reset Password</a>
+  <a href="#-troubleshooting">Troubleshooting</a>
 </p>
 
 ---
 
 ## What is Nextbase?
 
-**Nextbase** is a full-stack, self-hosted PostgreSQL management tool you deploy on your own server. Think of it as a lightweight, privacy-first alternative to Supabase Studio or pgAdmin — running entirely inside Docker on your VPS with no cloud dependency, no data leaving your server, and no subscription fees.
+**Nextbase** started as a self-hosted PostgreSQL manager. It has since grown into a **complete VPS control panel** — all running inside Docker on your own server with no cloud dependency, no data leaving your machine, and no subscription fees.
 
-You get a modern web UI to manage your database, browse and edit tables, write SQL, visualize your schema, take backups, and control database access — all from a browser.
+From a single browser tab you can:
+
+- Manage your **PostgreSQL** database (tables, SQL, schema, backups, pooling)
+- Monitor your **VPS** (CPU, RAM, disk, network)
+- Talk to an **AI assistant** powered by NVIDIA LLMs directly in your terminal
+- Manage **Docker** containers, images, and volumes
+- **Deploy apps** from any public GitHub repo containing a Dockerfile
+- Map **custom domains** to deployed apps with automatic DNS verification and free Let's Encrypt SSL
 
 ---
 
 ## Features
 
+### Database Management
 | Feature | Description |
 |---|---|
 | **Dashboard** | Real-time database stats — size, connections, uptime, table count |
-| **Table Editor** | Create tables, insert/edit/delete rows with an inline grid |
+| **Table Editor** | Create tables, insert / edit / delete rows with an inline grid |
 | **SQL Editor** | Full SQL query editor with syntax highlighting and result pane |
 | **Schema Visualizer** | Interactive diagram of all tables with FK relationship lines |
 | **Statistics & Charts** | Query performance, connection trends, and database activity graphs |
 | **Backup & Restore** | One-click `pg_dump` backups and `pg_restore` — stored on your server |
 | **Pause / Resume** | Suspend all external connections (stops pgBouncer + locks DB) |
-| **Expose Public** | HAProxy TCP proxy — toggle public access to Postgres on port 5432/6543 |
-| **Forgot Password** | Step-by-step SSH reset guide built into the UI |
-| **Theme Support** | Dark and light mode with theme-aware logo |
+| **Expose Public** | HAProxy TCP proxy — toggle public Postgres access on port 5432 / 6543 |
 | **Connection Pooling** | pgBouncer sits in front of Postgres for production-grade pooling |
+
+### VPS & Infrastructure
+| Feature | Description |
+|---|---|
+| **VPS Management** | Live CPU, RAM, disk, and network graphs for your entire server |
+| **AI Terminal** | Chat with NVIDIA-hosted LLMs (Llama 3, Mistral, etc.) in a browser terminal |
+| **Docker Manager** | View, start, stop, remove containers; inspect images and volumes |
+| **GitHub Auto Deploy** | Paste a public repo URL → Nextbase clones, builds the Dockerfile, starts the container, and assigns a port via HAProxy |
+| **Reverse Proxy Manager** | Map a domain to any running container port. Nextbase writes the nginx config, verifies DNS, and provisions a free Let's Encrypt TLS certificate automatically |
 
 ---
 
 ## Prerequisites
 
-Before you begin, make sure the following are installed on your server:
-
 - **Docker** ≥ 24 — [Install Docker](https://docs.docker.com/engine/install/)
 - **Docker Compose** ≥ 2 (ships with Docker Desktop, or install the plugin)
 - **Git**
-- An open firewall for port **3000** (web UI) and optionally **5432** / **6543** (database)
+- Firewall open for port **3000** (web UI), **80** and **443** (reverse proxy)
+- A domain (or subdomain) with DNS A-record pointing to your server IP for each app you want to expose via HTTPS
 
 ---
 
@@ -59,13 +74,11 @@ Before you begin, make sure the following are installed on your server:
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/rehanweb3/Nextbase.git nextbase
+git clone https://github.com/rehan3web/nextbase.git nextbase
 cd nextbase
 ```
 
 ### 2. Create your `.env` file
-
-Copy the example and fill in your credentials:
 
 ```bash
 cp .env.example .env
@@ -82,7 +95,7 @@ DB_PASSWORD=StrongPassword123!
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=SecureAdminPass!
 
-# JWT secret — generate a long random string
+# JWT secret — generate with: openssl rand -hex 32
 JWT_SECRET=replace_with_a_64_char_random_string
 ```
 
@@ -93,12 +106,6 @@ JWT_SECRET=replace_with_a_64_char_random_string
 ```bash
 docker compose -f postgres.yml up -d --build
 ```
-
-Docker Compose will:
-- Build and start **PostgreSQL**
-- Build and start **pgBouncer** (connection pooler)
-- Build and start the **Nextbase backend** (API server)
-- Build and start the **Nextbase frontend** (web UI)
 
 ### 4. Open the web UI
 
@@ -113,39 +120,52 @@ Log in with the `ADMIN_USERNAME` and `ADMIN_PASSWORD` you set in `.env`.
 ## Architecture
 
 ```
-                    ┌──────────────────────────────────────────────┐
-                    │                  Your Server                  │
-                    │                                               │
-  Browser ─────────►  :3000  Nextbase Frontend  (React / Vite)    │
-                    │            │                                  │
-                    │            ▼                                  │
-                    │  :3001  Nextbase Backend  (Node / Express)   │
-                    │            │                                  │
-                    │     ┌──────┴──────┐                          │
-                    │     ▼             ▼                          │
-                    │  :16543        :15432                         │
-                    │  pgBouncer     Postgres                       │
-                    │  (pooler)      (direct)                       │
-                    │                                               │
-                    │  [optional]  HAProxy TCP proxy                │
-                    │  :5432  ──► Postgres (public)                 │
-                    │  :6543  ──► pgBouncer (public)               │
-                    └──────────────────────────────────────────────┘
+                 ┌─────────────────────────────────────────────────────┐
+                 │                     Your Server                      │
+                 │                                                       │
+  Browser ──────►  :3000   Nextbase Frontend  (React / Vite)           │
+                 │               │                                       │
+                 │               ▼                                       │
+                 │  :3001   Nextbase Backend  (Node / Express)          │
+                 │               │                                       │
+                 │    ┌──────────┼──────────────────────┐               │
+                 │    ▼          ▼           ▼           ▼               │
+                 │  pgBouncer  Postgres   docker.sock   nginx            │
+                 │  :16543     :15432     (Docker API)  :80/:443         │
+                 │                                        │               │
+                 │                              nextbase-haproxy         │
+                 │                              :8000–:8098 (internal)   │
+                 │                                        │               │
+                 │                              Deployed containers      │
+                 │                              (nextbase-apps network)  │
+                 └─────────────────────────────────────────────────────┘
 ```
 
-| Service | Container | Internal Port | Purpose |
+### Reverse Proxy flow (domain → app)
+
+```
+Internet ──► nginx :80/:443 ──► nextbase-haproxy:PORT ──► container:EXPOSE_PORT
+```
+
+nginx and HAProxy communicate over the internal Docker bridge — HAProxy has no publicly exposed ports.
+
+### Service map
+
+| Service | Container | Port | Purpose |
 |---|---|---|---|
 | Frontend | `dbofather-client` | 3000 | React web UI |
-| Backend | `dbofather-server` | 3001 | REST API |
+| Backend | `dbofather-server` | 3001 | REST API + Docker control |
 | pgBouncer | `dbofather-pooler` | 16543 | Connection pooler |
 | PostgreSQL | `dbofather-db` | 15432 | Database |
-| HAProxy | `dbofather-proxy` | 5432 / 6543 | Public TCP proxy (optional) |
+| DB HAProxy | `dbofather-proxy` | 5432 / 6543 | Public TCP proxy (optional) |
+| App HAProxy | `nextbase-haproxy` | 8000–8098 (internal) | Per-app port proxy |
+| Nginx | `nextbase-nginx` | 80 / 443 | Domain → HTTPS reverse proxy |
 
 ---
 
 ## Configuration
 
-All configuration lives in **`.env`** in the project root. Docker Compose reads it automatically.
+All configuration lives in **`.env`** in the project root.
 
 | Variable | Description | Example |
 |---|---|---|
@@ -156,7 +176,7 @@ All configuration lives in **`.env`** in the project root. Docker Compose reads 
 | `ADMIN_PASSWORD` | Nextbase web UI password | `SecurePass!` |
 | `JWT_SECRET` | Secret for signing login tokens | 64-char random string |
 
-### Generating a strong JWT secret
+Generate a strong JWT secret:
 
 ```bash
 openssl rand -hex 32
@@ -166,75 +186,67 @@ openssl rand -hex 32
 
 ## Usage Guide
 
-### Dashboard
+### Database Dashboard
 
-The dashboard shows a live overview of your PostgreSQL instance:
-- Database size, number of tables, active connections
-- Server uptime and PostgreSQL version
-- Recent query activity
+Live overview of your PostgreSQL instance — database size, table count, active connections, uptime, PostgreSQL version, and recent query activity.
 
 ### Table Editor
 
-Browse all tables in your database. Select a table to:
-- View and scroll through all rows
-- **Insert** a new row with an auto-detect form (identity columns and UUIDs are filled automatically)
-- **Edit** any cell inline
-- **Delete** rows
-- **Create** new tables with a column builder (supports all PostgreSQL types, PRIMARY KEY, DEFAULT, NOT NULL)
+Browse all tables. Select a table to view, insert, edit, and delete rows. Create new tables with a full column builder (all PostgreSQL types, PRIMARY KEY, DEFAULT, NOT NULL, UNIQUE).
 
 ### SQL Editor
 
-Write and execute raw SQL queries:
-- Syntax-highlighted editor
-- Results shown in a scrollable grid
-- Error messages with line numbers
+Write and run raw SQL with syntax highlighting. Results appear in a scrollable grid with error messages that include line numbers.
 
 ### Schema Visualizer
 
-An interactive diagram of your entire database schema:
-- Each table is a card showing column names, types, and PK/FK badges
-- Foreign key relationships are drawn as animated lines with column labels (e.g. `order_id → id`)
-- Drag tables to rearrange, zoom and pan freely
-- Search box to highlight a specific table
+Interactive diagram of your schema. Tables are draggable cards. Foreign-key relationships are drawn as animated arrows with column labels. Zoom, pan, and search by table name.
 
 ### Statistics
 
-Charts showing database activity over time:
-- Active connections graph
-- Query throughput
-- Cache hit ratio
-- Table sizes
+Charts for active connections, query throughput, cache hit ratio, and table sizes — updated live.
 
 ### Backup & Restore
 
-- **Create Backup** — runs `pg_dump` inside the container and stores the file in `./backups/`
-- **Download** — download any backup file to your local machine
-- **Restore** — upload a `.sql` or `.dump` file and run `pg_restore` / `psql`
+- **Create Backup** — runs `pg_dump` and stores the file in `./backups/`
+- **Download** — download any backup to your local machine
+- **Restore** — upload a `.sql` or `.dump` file to restore
 
-Backups are plain SQL files and work with any standard PostgreSQL restore tool.
+### Pause / Resume
 
-### Pause & Resume Database
+**Pause** blocks all external connections (`ALLOW_CONNECTIONS false` + pgBouncer stop + active connection kill). **Resume** restores full access. The Nextbase backend remains connected throughout so the UI keeps working.
 
-**Pause** disconnects all external clients:
-1. Sets `ALLOW_CONNECTIONS false` on the database
-2. Stops the pgBouncer container so its pool cannot serve clients
-3. Terminates any remaining direct connections
+### VPS Management
 
-**Resume** restores access:
-1. Sets `ALLOW_CONNECTIONS true`
-2. Restarts pgBouncer
+Real-time server metrics — CPU usage per core, total / used / free RAM, disk usage per mount, and network I/O graphs. No agent required; data is read from `/proc` via the backend container.
 
-Nextbase's own backend pool stays connected during pause so the UI keeps working.
+### AI Terminal
 
-### Expose Public (HAProxy)
+Chat interface connected to NVIDIA-hosted LLMs (Llama 3.1, Mistral, and others). Ask questions about your server, generate SQL, debug configs, or get DevOps help — all without leaving the dashboard.
 
-Click **Expose Public** on the dashboard to start the HAProxy TCP proxy:
-- Port **5432** — direct PostgreSQL access
-- Port **6543** — pgBouncer pooled access
+### Docker Manager
 
-Click **Unexpose** to stop the proxy and close public access.
+Full Docker control from the browser:
+- View all containers with status, image, ports, and uptime
+- Start / stop / restart / remove containers
+- Browse images and volumes
+- Tail container logs in real time
 
-> Make sure your firewall/security group allows inbound TCP on 5432 and 6543 when exposing.
+### GitHub Auto Deploy
+
+1. Paste any public GitHub repo URL that contains a `Dockerfile`
+2. Nextbase clones it, builds the image, starts the container on the internal `nextbase-apps` network, and assigns an HAProxy port (8000–8098)
+3. Watch the live build log stream in the UI
+4. Map a domain to the assigned port via the Reverse Proxy manager
+
+### Reverse Proxy Manager
+
+Turn any deployed container into a public HTTPS endpoint:
+
+1. **Add Domain** — enter your domain (e.g. `app.example.com`) and the HAProxy port the app was assigned
+2. **DNS Verification** — Nextbase checks the domain's A-record matches your server IP
+3. **Enable SSL** — runs Certbot (Let's Encrypt) in webroot mode. Certificate is stored in `./letsencrypt/` and nginx is reloaded automatically
+4. Your app is live at `https://app.example.com` — certificate auto-renews
 
 ---
 
@@ -244,37 +256,24 @@ Pull the latest changes and rebuild:
 
 ```bash
 git pull
-docker compose -f postgres.yml up -d --build
+docker compose -f postgres.yml build
+docker compose -f postgres.yml up -d
 ```
 
-Your data is stored in the `pgdata` Docker volume and is never affected by updates.
+Your PostgreSQL data is in the `pgdata` Docker volume and is never affected by updates.
 
 ---
 
 ## Reset Password
 
-If you forget your admin credentials, follow the built-in guide at `/forgot-password` in the UI, or do it manually:
-
-### 1. SSH into your server
+If you forget your admin credentials, edit `.env` and restart:
 
 ```bash
-ssh your_user@your-server-ip
+nano .env   # change ADMIN_USERNAME / ADMIN_PASSWORD
+docker compose -f postgres.yml up -d --force-recreate dbcraft-server
 ```
 
-### 2. Edit `.env`
-
-```bash
-cd /path/to/nextbase
-nano .env
-```
-
-Change `ADMIN_USERNAME` and/or `ADMIN_PASSWORD`.
-
-### 3. Restart
-
-```bash
-docker compose -f postgres.yml up -d
-```
+Or follow the built-in guide at `/forgot-password` in the UI.
 
 ---
 
@@ -299,18 +298,23 @@ docker compose -f postgres.yml down -v
 | Problem | Solution |
 |---|---|
 | UI not loading on port 3000 | Check `docker ps` — make sure `dbofather-client` is running |
-| Login fails | Verify `ADMIN_USERNAME` and `ADMIN_PASSWORD` in `.env` and restart |
+| Login fails | Verify `ADMIN_USERNAME` / `ADMIN_PASSWORD` in `.env` and restart |
 | Database not accepting connections | Check if paused — click **Resume** in the UI |
-| Backup fails | Ensure Docker socket `/var/run/docker.sock` is mounted (it is by default) |
-| Can't connect from external client | Click **Expose Public** on the dashboard and allow ports 5432/6543 in your firewall |
+| Backup fails | Ensure Docker socket is mounted (`/var/run/docker.sock`) |
+| Can't connect external DB client | Click **Expose Public** on the dashboard and allow ports 5432 / 6543 in your firewall |
+| Domain shows 502 | Ensure HAProxy config has a listen block for the app's port — run a fresh deploy to trigger a config write |
+| SSL fails | Confirm the domain's A-record points to your server IP before clicking Enable SSL |
+| Docker deploy fails | Ensure the repo contains a `Dockerfile` and is public |
 
 View logs for any service:
 
 ```bash
-docker logs dbofather-server   # backend API
-docker logs dbofather-client   # frontend
-docker logs dbofather-db       # postgres
-docker logs dbofather-pooler   # pgbouncer
+docker logs dbofather-server     # backend API
+docker logs dbofather-client     # frontend
+docker logs dbofather-db         # postgres
+docker logs dbofather-pooler     # pgbouncer
+docker logs nextbase-haproxy     # app proxy
+docker logs nextbase-nginx       # reverse proxy
 ```
 
 ---
@@ -321,4 +325,4 @@ This project is licensed under the terms in [LICENSE](./LICENSE).
 
 ---
 
-<p align="center">Built with PostgreSQL · pgBouncer · Node.js · React · Docker</p>
+<p align="center">Built with PostgreSQL · pgBouncer · HAProxy · nginx · Node.js · React · Docker · NVIDIA LLMs</p>
